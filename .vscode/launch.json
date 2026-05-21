@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftDataSQLite}",
+            "name": "Debug SwiftDataSQLiteClient",
+            "target": "SwiftDataSQLiteClient",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug SwiftDataSQLiteClient"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SwiftDataSQLite}",
+            "name": "Release SwiftDataSQLiteClient",
+            "target": "SwiftDataSQLiteClient",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release SwiftDataSQLiteClient"
+        }
+    ]
+}

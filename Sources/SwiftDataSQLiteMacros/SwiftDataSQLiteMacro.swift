@@ -95,7 +95,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
             let name = identifier.identifier.text
             let typeName = typeAnnotation.type.trimmedDescription
             let isArray = typeName.hasPrefix("[") || typeName.hasPrefix("Array<")
-            let foreignKey = parseForeignKey(from: variable)
+            let foreignKey = parseForeignKey(from: variable, typeName: typeName, isArray: isArray)
 
             return PropertyInfo(name: name, typeName: typeName, isArray: isArray, foreignKey: foreignKey)
         }
@@ -111,7 +111,14 @@ public struct SQLiteTableMacro: ExtensionMacro {
         return tableName
     }
 
-    private static func parseForeignKey(from variable: VariableDeclSyntax) -> ForeignKeyInfo? {
+    private static func parseForeignKey(from variable: VariableDeclSyntax, typeName: String, isArray: Bool) -> ForeignKeyInfo? {
+        if let explicitForeignKey = parseExplicitForeignKey(from: variable) {
+            return explicitForeignKey
+        }
+        return inferForeignKeyFromRelationship(from: variable, typeName: typeName, isArray: isArray)
+    }
+
+    private static func parseExplicitForeignKey(from variable: VariableDeclSyntax) -> ForeignKeyInfo? {
         guard let attribute = variable.attributes.compactMap({ $0.as(AttributeSyntax.self) }).first(where: { $0.attributeName.trimmedDescription == "SQLiteForeignKey" }) else {
             return nil
         }
@@ -136,7 +143,57 @@ public struct SQLiteTableMacro: ExtensionMacro {
             propertyName: propertyName,
             keyPath: keyPathExpr.trimmedDescription
         )
-        return nil
+    }
+
+    private static func inferForeignKeyFromRelationship(from variable: VariableDeclSyntax, typeName: String, isArray: Bool) -> ForeignKeyInfo? {
+        guard !isArray else {
+            return nil
+        }
+        guard hasRelationshipInverseAttribute(on: variable) else {
+            return nil
+        }
+        guard let normalizedTypeName = normalizeRelationshipTypeName(typeName) else {
+            return nil
+        }
+
+        return ForeignKeyInfo(
+            columnName: "\(normalizedTypeName.lowercased())_id",
+            typeName: normalizedTypeName,
+            propertyName: "id",
+            keyPath: "\\\(normalizedTypeName).id"
+        )
+    }
+
+    private static func hasRelationshipInverseAttribute(on variable: VariableDeclSyntax) -> Bool {
+        guard let attribute = variable.attributes.compactMap({ $0.as(AttributeSyntax.self) }).first(where: { $0.attributeName.trimmedDescription == "Relationship" }) else {
+            return false
+        }
+        guard let arguments = attribute.arguments?.as(LabeledExprListSyntax.self) else {
+            return false
+        }
+        return arguments.contains(where: { $0.label?.text == "inverse" })
+    }
+
+    private static func normalizeRelationshipTypeName(_ typeName: String) -> String? {
+        var normalizedTypeName = typeName.replacingOccurrences(of: " ", with: "")
+
+        if normalizedTypeName.hasSuffix("?") || normalizedTypeName.hasSuffix("!") {
+            normalizedTypeName.removeLast()
+        }
+
+        if normalizedTypeName.hasPrefix("Optional<") && normalizedTypeName.hasSuffix(">") {
+            normalizedTypeName.removeFirst("Optional<".count)
+            normalizedTypeName.removeLast()
+        } else if normalizedTypeName.hasPrefix("Swift.Optional<") && normalizedTypeName.hasSuffix(">") {
+            normalizedTypeName.removeFirst("Swift.Optional<".count)
+            normalizedTypeName.removeLast()
+        }
+
+        if let lastComponent = normalizedTypeName.split(separator: ".").last {
+            normalizedTypeName = String(lastComponent)
+        }
+
+        return normalizedTypeName.isEmpty ? nil : normalizedTypeName
     }
 }
 

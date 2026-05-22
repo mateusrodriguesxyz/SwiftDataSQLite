@@ -9,8 +9,7 @@ class Author {
     var name: String
     var country: String
     var photo: Data?
-    @Relationship(inverse: \Book.author)
-    var books: [Book] = []
+    @Relationship var books: [Book] = []
     init(id: Int, name: String, country: String, photo: Data? = nil) {
         self.id = id
         self.name = name
@@ -25,8 +24,7 @@ class Book {
     var id: Int
     var name: String
     var year: Int
-    @SQLiteForeignKey("author_id", \Author.id)
-    var author: Author
+    @Relationship(inverse: \Author.books) var author: Author
     init(id: Int, name: String, year: Int, author: Author) {
         self.id = id
         self.name = name
@@ -41,14 +39,18 @@ let modelContext = modelContainer.mainContext
 
 let url = Bundle.module.url(forResource: "library", withExtension: "sqlite")!
 
-try modelContext.loadFromSQLite([Author.self, Book.self], path: url.path(percentEncoded: false))
-
-let descriptor = FetchDescriptor<Author>(predicate: Predicate.true)
-let authors = try modelContext.fetch(descriptor)
-
-for author in authors {
-    print(author.name)
-    for book in author.books {
-        print("\t", book.name)
+do {
+    try modelContext.loadFromSQLite([Author.self, Book.self], path: url.path(percentEncoded: false))
+    
+    let descriptor = FetchDescriptor<Author>(predicate: Predicate.true)
+    let authors = try modelContext.fetch(descriptor)
+    
+    for author in authors {
+        print(author.name)
+        for book in author.books {
+            print("\t", book.name)
+        }
     }
+} catch {
+    print(error)
 }

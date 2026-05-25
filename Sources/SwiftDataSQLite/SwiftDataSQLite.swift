@@ -9,19 +9,11 @@ import Foundation
 @attached(peer)
 public macro SQLiteForeignKey(_ column: String, _ keyPath: AnyKeyPath) = #externalMacro(module: "SwiftDataSQLiteMacros", type: "SQLiteForeignKeyMacro")
 
-@attached(extension, conformances: SQLiteTableRepresentable, names: named(loadModelsFromSQLiteRows(modelContext:database:)), named(init(row:modelContext:)))
+@attached(extension, conformances: SQLiteTableRepresentable, names: named(SQLiteRecord), named(loadModelsFromSQLiteRows(modelContext:database:)), named(init(record:modelContext:)))
 public macro SQLiteTable(_ table: String) = #externalMacro(module: "SwiftDataSQLiteMacros", type: "SQLiteTableMacro")
 
 public protocol SQLiteTableRepresentable: PersistentModel {
 	static func loadModelsFromSQLiteRows(modelContext: SwiftData.ModelContext, database: GRDB.Database) throws
-}
-
-public func __sqliteValue<R, T: DatabaseValueConvertible & StatementColumnConvertible>(
-	_ row: GRDB.Row,
-	_ name: String,
-	_ keyPath: KeyPath<R, T>
-) -> T {
-	row[name]
 }
 
 extension View {
@@ -47,9 +39,9 @@ extension ModelContext {
         }
     }
     func _loadModelsFromSQLiteRows<T: SQLiteTableRepresentable>(type: T.Type, database: GRDB.Database) throws {
-        guard try fetchCount(FetchDescriptor(predicate: Predicate<T>.true)) == 0 else {
-            return
-        }
+//        guard try fetchCount(FetchDescriptor(predicate: Predicate<T>.true)) == 0 else {
+//            return
+//        }
         try type.loadModelsFromSQLiteRows(modelContext: self, database: database)
     }
 }

@@ -16,6 +16,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
         let name: String
         let typeName: String
         let isArray: Bool
+        let hasRelationshipAttribute: Bool
         let foreignKey: ForeignKeyInfo?
     }
 
@@ -30,7 +31,10 @@ public struct SQLiteTableMacro: ExtensionMacro {
         let tableName = parseTableName(from: node) ?? "\(typeName.lowercased())s"
         let properties = collectProperties(from: declaration)
 
-        let initProperties = properties.filter { !$0.isArray }
+        let initProperties = properties.filter { !($0.isArray && $0.hasRelationshipAttribute) }
+
+        let recordFieldLines = buildRecordFieldLines(from: initProperties)
+        let recordFieldsBlock = recordFieldLines.joined(separator: "\n")
 
         var fkSetupLines: [String] = []
         var initArgumentLines: [String] = []
@@ -41,14 +45,14 @@ public struct SQLiteTableMacro: ExtensionMacro {
                 let descriptorVarName = "\(property.name)FetchDescriptor"
                 let relatedVarName = "\(property.name)"
                 fkSetupLines.append("""
-                let \(fkVarName) = __sqliteValue(row, \"\(foreignKey.columnName)\", \(foreignKey.keyPath))
+                let \(fkVarName) = record.\(foreignKey.columnName)
                 var \(descriptorVarName) = FetchDescriptor<\(foreignKey.typeName)>(predicate: #Predicate { $0.\(foreignKey.propertyName) == \(fkVarName) })
                 \(descriptorVarName).fetchLimit = 1
                 let \(relatedVarName) = try modelContext.fetch(\(descriptorVarName))[0]
                 """)
                 initArgumentLines.append("\(property.name): \(relatedVarName)")
             } else {
-                initArgumentLines.append("\(property.name): row[\"\(property.name)\"]")
+                initArgumentLines.append("\(property.name): record.\(property.name)")
             }
         }
 
@@ -58,13 +62,24 @@ public struct SQLiteTableMacro: ExtensionMacro {
 
         let source = """
         extension \(typeName): SQLiteTableRepresentable {
+            struct SQLiteRecord: Codable, FetchableRecord {
+        \(recordFieldsBlock)
+            }
+
             static func loadModelsFromSQLiteRows(modelContext: SwiftData.ModelContext, database: GRDB.Database) throws {
-                try Row.fetchCursor(database, sql: \"SELECT * FROM \(tableName)\").forEach { row in
-                    let model = try \(typeName)(row: row, modelContext: modelContext)
-                    modelContext.insert(model)
+                let records = try SQLiteRecord.fetchAll(database, sql: \"SELECT * FROM \(tableName)\")
+                for record in records {
+                    let model = try \(typeName)(record: record, modelContext: modelContext)
+                    let id = model.id
+                    let modelFetchDescriptor = FetchDescriptor<\(typeName)>(predicate: #Predicate {
+                        $0.id == id
+                    })
+                    if try modelContext.fetch(modelFetchDescriptor).isEmpty {
+                        modelContext.insert(model)
+                    }
                 }
             }
-            convenience init(row: GRDB.Row, modelContext: SwiftData.ModelContext) throws {\(maybeFkBlock)
+            convenience init(record: SQLiteRecord, modelContext: SwiftData.ModelContext) throws {\(maybeFkBlock)
                 self.init(
                 \(initArgsBlock)
                 )
@@ -95,9 +110,25 @@ public struct SQLiteTableMacro: ExtensionMacro {
             let name = identifier.identifier.text
             let typeName = typeAnnotation.type.trimmedDescription
             let isArray = typeName.hasPrefix("[") || typeName.hasPrefix("Array<")
+            let hasRelationshipAttribute = hasRelationshipAttribute(on: variable)
             let foreignKey = parseForeignKey(from: variable, typeName: typeName, isArray: isArray)
 
-            return PropertyInfo(name: name, typeName: typeName, isArray: isArray, foreignKey: foreignKey)
+            return PropertyInfo(
+                name: name,
+                typeName: typeName,
+                isArray: isArray,
+                hasRelationshipAttribute: hasRelationshipAttribute,
+                foreignKey: foreignKey
+            )
+        }
+    }
+
+    private static func buildRecordFieldLines(from properties: [PropertyInfo]) -> [String] {
+        properties.compactMap { property in
+            if let foreignKey = property.foreignKey {
+                return "var \(foreignKey.columnName): Int"
+            }
+            return "var \(property.name): \(property.typeName)"
         }
     }
 
@@ -172,6 +203,12 @@ public struct SQLiteTableMacro: ExtensionMacro {
             return false
         }
         return arguments.contains(where: { $0.label?.text == "inverse" })
+    }
+
+    private static func hasRelationshipAttribute(on variable: VariableDeclSyntax) -> Bool {
+        variable.attributes
+            .compactMap { $0.as(AttributeSyntax.self) }
+            .contains { $0.attributeName.trimmedDescription == "Relationship" }
     }
 
     private static func normalizeRelationshipTypeName(_ typeName: String) -> String? {

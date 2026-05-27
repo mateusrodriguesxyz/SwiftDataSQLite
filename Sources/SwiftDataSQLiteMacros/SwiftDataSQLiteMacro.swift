@@ -20,6 +20,11 @@ public struct SQLiteTableMacro: ExtensionMacro {
         let foreignKey: ForeignKeyInfo?
     }
 
+    private struct InitializerParameterInfo {
+        let argumentLabel: String?
+        let localName: String
+    }
+
     public static func expansion(
         of node: AttributeSyntax,
         attachedTo declaration: some DeclGroupSyntax,
@@ -30,6 +35,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
         let typeName = type.trimmedDescription
         let tableName = parseTableName(from: node) ?? "\(typeName.lowercased())s"
         let properties = collectProperties(from: declaration)
+        let firstInitializerParameters = parseFirstInitializerParameters(from: declaration)
 
         let initProperties = properties.filter { !($0.isArray && $0.hasRelationshipAttribute) }
 
@@ -38,21 +44,36 @@ public struct SQLiteTableMacro: ExtensionMacro {
 
         var fkSetupLines: [String] = []
         var initArgumentLines: [String] = []
+        var seenForeignKeyProperties: Set<String> = []
 
-        for property in initProperties {
-            if let foreignKey = property.foreignKey {
-                let fkVarName = "\(property.name)ForeignKeyValue"
-                let descriptorVarName = "\(property.name)FetchDescriptor"
-                let relatedVarName = "\(property.name)"
-                fkSetupLines.append("""
-                let \(fkVarName) = record.\(foreignKey.columnName)
-                var \(descriptorVarName) = FetchDescriptor<\(foreignKey.typeName)>(predicate: #Predicate { $0.\(foreignKey.propertyName) == \(fkVarName) })
-                \(descriptorVarName).fetchLimit = 1
-                let \(relatedVarName) = try modelContext.fetch(\(descriptorVarName))[0]
-                """)
-                initArgumentLines.append("\(property.name): \(relatedVarName)")
+        let propertiesByName = Dictionary(uniqueKeysWithValues: initProperties.map { ($0.name, $0) })
+
+        let initializerParameters = firstInitializerParameters.isEmpty
+            ? initProperties.map { InitializerParameterInfo(argumentLabel: $0.name, localName: $0.name) }
+            : firstInitializerParameters
+
+        for parameter in initializerParameters {
+            if
+                let property = propertiesByName[parameter.localName],
+                let foreignKey = property.foreignKey
+            {
+                if !seenForeignKeyProperties.contains(property.name) {
+                    let fkVarName = "\(property.name)ForeignKeyValue"
+                    let descriptorVarName = "\(property.name)FetchDescriptor"
+                    let relatedVarName = "\(property.name)"
+                    fkSetupLines.append("""
+                    let \(fkVarName) = record.\(foreignKey.columnName)
+                    var \(descriptorVarName) = FetchDescriptor<\(foreignKey.typeName)>(predicate: #Predicate { $0.\(foreignKey.propertyName) == \(fkVarName) })
+                    \(descriptorVarName).fetchLimit = 1
+                    let \(relatedVarName) = try modelContext.fetch(\(descriptorVarName))[0]
+                    """)
+                    seenForeignKeyProperties.insert(property.name)
+                }
+                let valueExpression = property.name
+                initArgumentLines.append(buildInitializerArgument(label: parameter.argumentLabel, valueExpression: valueExpression))
             } else {
-                initArgumentLines.append("\(property.name): record.\(property.name)")
+                let valueExpression = "record.\(parameter.localName)"
+                initArgumentLines.append(buildInitializerArgument(label: parameter.argumentLabel, valueExpression: valueExpression))
             }
         }
 
@@ -62,8 +83,9 @@ public struct SQLiteTableMacro: ExtensionMacro {
 
         let source = """
         extension \(typeName): SQLiteTableRepresentable {
-            struct SQLiteRecord: Codable, FetchableRecord {
-        \(recordFieldsBlock)
+            struct SQLiteRecord: Decodable, FetchableRecord {
+                nonisolated(unsafe)static let databaseColumnDecodingStrategy = DatabaseColumnDecodingStrategy.convertFromSnakeCase
+                \(recordFieldsBlock)
             }
 
             static func loadModelsFromSQLiteRows(modelContext: SwiftData.ModelContext, database: GRDB.Database) throws {
@@ -121,6 +143,38 @@ public struct SQLiteTableMacro: ExtensionMacro {
                 foreignKey: foreignKey
             )
         }
+    }
+
+    private static func parseFirstInitializerParameters(from declaration: some DeclGroupSyntax) -> [InitializerParameterInfo] {
+        guard
+            let initializer = declaration.memberBlock.members
+                .compactMap({ $0.decl.as(InitializerDeclSyntax.self) })
+                .first
+        else {
+            return []
+        }
+
+        return initializer.signature.parameterClause.parameters.compactMap { parameter in
+            let firstName = parameter.firstName.text
+            let secondName = parameter.secondName?.text
+
+            if firstName == "_", let secondName {
+                return InitializerParameterInfo(argumentLabel: nil, localName: secondName)
+            }
+
+            if let secondName {
+                return InitializerParameterInfo(argumentLabel: firstName, localName: secondName)
+            }
+
+            return InitializerParameterInfo(argumentLabel: firstName, localName: firstName)
+        }
+    }
+
+    private static func buildInitializerArgument(label: String?, valueExpression: String) -> String {
+        guard let label else {
+            return valueExpression
+        }
+        return "\(label): \(valueExpression)"
     }
 
     private static func buildRecordFieldLines(from properties: [PropertyInfo]) -> [String] {
@@ -188,7 +242,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
         }
 
         return ForeignKeyInfo(
-            columnName: "\(normalizedTypeName.lowercased())_id",
+            columnName: "\(normalizedTypeName.lowercased())Id",
             typeName: normalizedTypeName,
             propertyName: "id",
             keyPath: "\\\(normalizedTypeName).id"

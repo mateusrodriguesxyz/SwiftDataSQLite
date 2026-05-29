@@ -38,6 +38,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
         let firstInitializerParameters = parseFirstInitializerParameters(from: declaration)
 
         let initProperties = properties.filter { !($0.isArray && $0.hasRelationshipAttribute) }
+        let updatableProperties = initProperties.filter { $0.name != "id" }
 
         let recordFieldLines = buildRecordFieldLines(from: initProperties)
         let recordFieldsBlock = recordFieldLines.joined(separator: "\n")
@@ -78,6 +79,8 @@ public struct SQLiteTableMacro: ExtensionMacro {
         }
 
         let initArgsBlock = initArgumentLines.joined(separator: ",\n")
+        let updateAssignmentLines = updatableProperties.map { "existingModel.\($0.name) = model.\($0.name)" }
+        let updateAssignmentsBlock = updateAssignmentLines.joined(separator: "\n")
         let fkSetupBlock = fkSetupLines.joined(separator: "\n")
         let maybeFkBlock = fkSetupBlock.isEmpty ? "" : "\n\(fkSetupBlock)\n"
 
@@ -92,11 +95,16 @@ public struct SQLiteTableMacro: ExtensionMacro {
                 let records = try SQLiteRecord.fetchAll(database, sql: \"SELECT * FROM \(tableName)\")
                 for record in records {
                     let model = try \(typeName)(record: record, modelContext: modelContext)
-                    let id = model.id
-                    let modelFetchDescriptor = FetchDescriptor<\(typeName)>(predicate: #Predicate {
+                    let id = record.id
+                    var modelFetchDescriptor = FetchDescriptor<\(typeName)>(predicate: #Predicate {
                         $0.id == id
                     })
-                    if try modelContext.fetch(modelFetchDescriptor).isEmpty {
+                    modelFetchDescriptor.fetchLimit = 1
+                    let result = try modelContext.fetch(modelFetchDescriptor)
+                    if let existingModel = result.first {
+                        \(updateAssignmentsBlock)
+                        try modelContext.save()
+                    } else {
                         modelContext.insert(model)
                     }
                 }

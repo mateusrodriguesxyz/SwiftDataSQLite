@@ -7,6 +7,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
     
     private struct ForeignKeyInfo {
         let columnName: String
+        let recordPropertyName: String
         let typeName: String
         let propertyName: String
         let keyPath: String
@@ -72,7 +73,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
                     let descriptorVarName = "\(property.name)FetchDescriptor"
                     let relatedVarName = "\(property.name)"
                     fkSetupLines.append("""
-                    let \(fkVarName) = record.\(foreignKey.columnName)
+                    let \(fkVarName) = record.\(foreignKey.recordPropertyName)
                     var \(descriptorVarName) = FetchDescriptor<\(foreignKey.typeName)>(predicate: #Predicate { $0.\(foreignKey.propertyName) == \(fkVarName) })
                     \(descriptorVarName).fetchLimit = 1
                     let \(relatedVarName) = try modelContext.fetch(\(descriptorVarName))[0]
@@ -204,13 +205,23 @@ public struct SQLiteTableMacro: ExtensionMacro {
     private static func buildRecordFieldLines(from properties: [PropertyInfo]) -> [String] {
         properties.compactMap { property in
             if let foreignKey = property.foreignKey {
-                return "var \(foreignKey.columnName): Int"
+                return "var \(foreignKey.recordPropertyName): Int"
             }
             return "var \(property.name): \(property.typeName)"
         }
     }
 
     private static func recordFieldName(for property: PropertyInfo) -> String {
+        if let fk = property.foreignKey {
+            return fk.recordPropertyName
+        }
+        return property.name
+    }
+
+    private static func recordFieldDBColumn(for property: PropertyInfo) -> String {
+        if let customName = property.customColumnName {
+            return customName
+        }
         if let fk = property.foreignKey {
             return fk.columnName
         }
@@ -223,14 +234,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
 
         let caseLines = properties.map { property in
             let fieldName = recordFieldName(for: property)
-            let columnName: String
-            if let customName = property.customColumnName {
-                columnName = customName
-            } else if let fk = property.foreignKey {
-                columnName = fk.columnName
-            } else {
-                columnName = property.name
-            }
+            let columnName = recordFieldDBColumn(for: property)
             return "    case \(fieldName) = \"\(columnName)\""
         }
 
@@ -279,6 +283,7 @@ enum CodingKeys: String, CodingKey {
         }
         return ForeignKeyInfo(
             columnName: columnName,
+            recordPropertyName: columnName,
             typeName: typeName,
             propertyName: propertyName,
             keyPath: keyPathExpr.trimmedDescription
@@ -299,7 +304,7 @@ enum CodingKeys: String, CodingKey {
         guard !isArray else {
             return nil
         }
-        guard hasRelationshipInverseAttribute(on: variable) else {
+        guard hasRelationshipAttribute(on: variable) else {
             return nil
         }
         guard let normalizedTypeName = normalizeRelationshipTypeName(typeName) else {
@@ -308,20 +313,11 @@ enum CodingKeys: String, CodingKey {
 
         return ForeignKeyInfo(
             columnName: "\(normalizedTypeName.lowercased())_id",
+            recordPropertyName: "\(normalizedTypeName.prefix(1).lowercased())\(normalizedTypeName.dropFirst())Id",
             typeName: normalizedTypeName,
             propertyName: "id",
             keyPath: "\\\(normalizedTypeName).id"
         )
-    }
-
-    private static func hasRelationshipInverseAttribute(on variable: VariableDeclSyntax) -> Bool {
-        guard let attribute = variable.attributes.compactMap({ $0.as(AttributeSyntax.self) }).first(where: { $0.attributeName.trimmedDescription == "Relationship" }) else {
-            return false
-        }
-        guard let arguments = attribute.arguments?.as(LabeledExprListSyntax.self) else {
-            return false
-        }
-        return arguments.contains(where: { $0.label?.text == "inverse" })
     }
 
     private static func hasRelationshipAttribute(on variable: VariableDeclSyntax) -> Bool {

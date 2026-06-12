@@ -60,23 +60,31 @@ class Book {
     }
 }
 
-let modelContainer = try ModelContainer(for: Author.self, Book.self)
+let modelContainer = try ModelContainer(for: Author.self, Book.self, Project.self, Address.self)
 
 let modelContext = modelContainer.mainContext
 
 let path = Bundle.module.path(forResource: "library", ofType: "sqlite")!
 
 do {
-    try modelContext.loadFromSQLite([Author.self, Book.self], path: path)
+    try modelContext.loadFromSQLite([Author.self, Book.self, Address.self, Project.self], path: path)
     
-    let descriptor = FetchDescriptor<Author>(predicate: Predicate.true)
-    let authors = try modelContext.fetch(descriptor)
+    let authorDescriptor = FetchDescriptor<Author>(predicate: Predicate.true)
+    let authors = try modelContext.fetch(authorDescriptor)
     
     for author in authors {
         print(author.name)
         print("country: \(author.country)")
         print("genre: \(author.genre ?? [])")
         print("books: \(author.books.map { "\($0.title) (\($0.year))" })")
+    }
+    
+    print("\n--- Projects ---")
+    let projectDescriptor = FetchDescriptor<Project>(predicate: Predicate.true)
+    let projects = try modelContext.fetch(projectDescriptor)
+    
+    for project in projects {
+        print("\(project.name) — \(project.address.cep)")
     }
 } catch {
     print(error)

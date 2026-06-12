@@ -9,6 +9,9 @@ import Foundation
 @attached(peer)
 public macro SQLiteForeignKey(_ column: String, _ keyPath: AnyKeyPath) = #externalMacro(module: "SwiftDataSQLiteMacros", type: "SQLiteForeignKeyMacro")
 
+@attached(peer)
+public macro SQLiteColumn(_ column: String) = #externalMacro(module: "SwiftDataSQLiteMacros", type: "SQLiteColumnMacro")
+
 @attached(extension, conformances: SQLiteTableRepresentable, names: named(SQLiteRecord), named(loadModelsFromSQLiteRows(modelContext:database:)), named(init(record:modelContext:)))
 public macro SQLiteTable(_ table: String) = #externalMacro(module: "SwiftDataSQLiteMacros", type: "SQLiteTableMacro")
 

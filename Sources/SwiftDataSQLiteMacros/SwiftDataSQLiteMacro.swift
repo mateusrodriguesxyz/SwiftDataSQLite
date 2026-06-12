@@ -18,6 +18,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
         let isArray: Bool
         let hasRelationshipAttribute: Bool
         let foreignKey: ForeignKeyInfo?
+        let customColumnName: String?
     }
 
     private struct InitializerParameterInfo {
@@ -42,6 +43,14 @@ public struct SQLiteTableMacro: ExtensionMacro {
 
         let recordFieldLines = buildRecordFieldLines(from: initProperties)
         let recordFieldsBlock = recordFieldLines.joined(separator: "\n")
+
+        let codingKeysBlock = buildCodingKeysEnum(from: initProperties)
+        let decodingSection: String
+        if let codingKeys = codingKeysBlock {
+            decodingSection = "\n\(codingKeys)"
+        } else {
+            decodingSection = "\nnonisolated(unsafe)static let databaseColumnDecodingStrategy = DatabaseColumnDecodingStrategy.convertFromSnakeCase"
+        }
 
         var fkSetupLines: [String] = []
         var initArgumentLines: [String] = []
@@ -87,7 +96,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
         let source = """
         extension \(typeName): SQLiteTableRepresentable {
             struct SQLiteRecord: Decodable, FetchableRecord {
-                nonisolated(unsafe)static let databaseColumnDecodingStrategy = DatabaseColumnDecodingStrategy.convertFromSnakeCase
+                \(decodingSection)
                 \(recordFieldsBlock)
             }
 
@@ -142,13 +151,20 @@ public struct SQLiteTableMacro: ExtensionMacro {
             let isArray = typeName.hasPrefix("[") || typeName.hasPrefix("Array<")
             let hasRelationshipAttribute = hasRelationshipAttribute(on: variable)
             let foreignKey = parseForeignKey(from: variable, typeName: typeName, isArray: isArray)
+            let customColumnName: String?
+            if foreignKey == nil {
+                customColumnName = parseSQLiteColumn(from: variable)
+            } else {
+                customColumnName = nil
+            }
 
             return PropertyInfo(
                 name: name,
                 typeName: typeName,
                 isArray: isArray,
                 hasRelationshipAttribute: hasRelationshipAttribute,
-                foreignKey: foreignKey
+                foreignKey: foreignKey,
+                customColumnName: customColumnName
             )
         }
     }
@@ -192,6 +208,37 @@ public struct SQLiteTableMacro: ExtensionMacro {
             }
             return "var \(property.name): \(property.typeName)"
         }
+    }
+
+    private static func recordFieldName(for property: PropertyInfo) -> String {
+        if let fk = property.foreignKey {
+            return fk.columnName
+        }
+        return property.name
+    }
+
+    private static func buildCodingKeysEnum(from properties: [PropertyInfo]) -> String? {
+        let hasCustomColumn = properties.contains(where: { $0.customColumnName != nil })
+        guard hasCustomColumn else { return nil }
+
+        let caseLines = properties.map { property in
+            let fieldName = recordFieldName(for: property)
+            let columnName: String
+            if let customName = property.customColumnName {
+                columnName = customName
+            } else if let fk = property.foreignKey {
+                columnName = fk.columnName
+            } else {
+                columnName = property.name
+            }
+            return "    case \(fieldName) = \"\(columnName)\""
+        }
+
+        return """
+enum CodingKeys: String, CodingKey {
+\(caseLines.joined(separator: "\n"))
+}
+"""
     }
 
     private static func parseTableName(from node: AttributeSyntax) -> String? {
@@ -238,6 +285,16 @@ public struct SQLiteTableMacro: ExtensionMacro {
         )
     }
 
+    private static func parseSQLiteColumn(from variable: VariableDeclSyntax) -> String? {
+        guard let attribute = variable.attributes.compactMap({ $0.as(AttributeSyntax.self) }).first(where: { $0.attributeName.trimmedDescription == "SQLiteColumn" }) else {
+            return nil
+        }
+        guard let arguments = attribute.arguments?.as(LabeledExprListSyntax.self), arguments.count == 1 else {
+            return nil
+        }
+        return arguments.first?.expression.as(StringLiteralExprSyntax.self)?.representedLiteralValue
+    }
+
     private static func inferForeignKeyFromRelationship(from variable: VariableDeclSyntax, typeName: String, isArray: Bool) -> ForeignKeyInfo? {
         guard !isArray else {
             return nil
@@ -250,7 +307,7 @@ public struct SQLiteTableMacro: ExtensionMacro {
         }
 
         return ForeignKeyInfo(
-            columnName: "\(normalizedTypeName.lowercased())Id",
+            columnName: "\(normalizedTypeName.lowercased())_id",
             typeName: normalizedTypeName,
             propertyName: "id",
             keyPath: "\\\(normalizedTypeName).id"

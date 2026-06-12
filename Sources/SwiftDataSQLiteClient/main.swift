@@ -29,6 +29,7 @@ class Author {
     }
 }
 
+
 // +----+----------------------------+------+-----------+
 // | id | name                       | year | author_id |
 // +----+----------------------------+------+-----------+
@@ -46,13 +47,14 @@ class Author {
 @SQLiteTable("books")
 @Model
 class Book {
+    @SQLiteColumn("ID")
     var id: Int
-    var name: String
+    @SQLiteColumn("name") var title: String
     var year: Int
     @Relationship(inverse: \Author.books) var author: Author
-    init(id: Int, name: String, year: Int, author: Author) {
+    init(id: Int, title: String, year: Int, author: Author) {
         self.id = id
-        self.name = name
+        self.title = title
         self.year = year
         self.author = author
     }
@@ -74,7 +76,7 @@ do {
         print(author.name)
         print("country: \(author.country)")
         print("genre: \(author.genre ?? [])")
-        print("books: \(author.books.map { "\($0.name) (\($0.year))" })")
+        print("books: \(author.books.map { "\($0.title) (\($0.year))" })")
     }
 } catch {
     print(error)
